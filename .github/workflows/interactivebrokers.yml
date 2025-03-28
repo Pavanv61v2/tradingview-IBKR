@@ -1,0 +1,216 @@
+name: TradingView-IBKR Bridge
+'on':
+  repository_dispatch:
+    types:
+      - trading-signal
+  workflow_dispatch: null
+jobs:
+  place-order:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Process Trading Signal
+        env:
+          IBKR_USERNAME: '${{ secrets.IBKR_USERNAME }}'
+          IBKR_PASSWORD: '${{ secrets.IBKR_PASSWORD }}'
+          IBKR_ACCOUNT_ID: '${{ secrets.IBKR_ACCOUNT_ID }}'
+          SIGNAL_DATA: '${{ toJson(github.event.client_payload) }}'
+          NOTIFICATIONS_ENABLED: 'true'
+          NOTIFICATION_EMAIL: '${{ secrets.NOTIFICATION_EMAIL }}'
+        run: |
+          echo "Received trading signal"
+          echo "Symbol: ${{ github.event.client_payload.symbol || 'N/A' }}"
+          echo "Action: ${{ github.event.client_payload.action || 'N/A' }}"
+          echo "Order size: ${{ github.event.client_payload.order_size || 'N/A' }}"
+          
+          # Install dependencies
+          npm install axios crypto-js
+
+          # Create and run the trading script
+          cat > trade.js << 'EOF'
+          const axios = require('axios');
+          const crypto = require('crypto');
+          const fs = require('fs');
+          
+          // Trade log file
+          const TRADE_LOG_FILE = 'trade_history.json';
+          
+          // Notification settings
+          const NOTIFICATIONS_ENABLED = process.env.NOTIFICATIONS_ENABLED === 'true';
+          const NOTIFICATION_EMAIL = process.env.NOTIFICATION_EMAIL;
+          
+          // IBKR API Connection details - adjust as needed
+          const IBKR_API_BASE_URL = 'https://localhost:5000/v1/portal';  // This is usually local because IBKR Client Portal runs locally
+          
+          // You may need to use a different approach for IBKR
+          // The example below is simplified and would need adjustment based on your setup
+          async function placeOrder() {
+            try {
+              const username = process.env.IBKR_USERNAME;
+              const password = process.env.IBKR_PASSWORD;
+              const accountId = process.env.IBKR_ACCOUNT_ID;
+              
+              // Parse signal data
+              let signal;
+              try {
+                signal = process.env.SIGNAL_DATA ? JSON.parse(process.env.SIGNAL_DATA) : null;
+                if (!signal) {
+                  throw new Error("No signal data provided");
+                }
+              } catch(e) {
+                console.error("Error parsing signal data:", e.message);
+                throw e;
+              }
+              
+              console.log("Processing signal:", signal);
+              
+              // Format symbol
+              let symbol = signal.symbol || signal.ticker;
+              if (!symbol) {
+                throw new Error("No symbol provided in signal");
+              }
+              
+              // Format symbol for IBKR (may need adjustments)
+              // IBKR often requires more specific symbol formats including exchange info
+              symbol = formatSymbolForIBKR(symbol);
+              
+              // Determine if this is a buy or sell order
+              if (!signal.action) {
+                throw new Error("No action (buy/sell) provided in signal");
+              }
+              
+              const isBuy = signal.action.toLowerCase() === 'buy';
+              
+              // Calculate order size
+              let orderSize;
+              let originalAmount;
+              
+              if (signal.order_size && !isNaN(parseFloat(signal.order_size))) {
+                orderSize = parseFloat(signal.order_size);
+                originalAmount = orderSize;
+              } else {
+                // Default order size if none specified
+                orderSize = 100; // Example default - adjust as needed
+                originalAmount = orderSize;
+              }
+              
+              // IMPORTANT NOTE:
+              // The below logic is a placeholder. IBKR API integration would require:
+              // 1. Authentication (typically via Client Portal API or TWS API)
+              // 2. Connection to your IBKR instance (which might be running locally)
+              // 3. Specific order formatting according to IBKR requirements
+              
+              console.log("This is a placeholder for actual IBKR API integration");
+              console.log(`Would place a ${isBuy ? 'BUY' : 'SELL'} order for ${symbol} with size ${orderSize}`);
+              
+              // Mock successful response for testing
+              // In actual implementation, this would be the response from IBKR API
+              const mockOrderResponse = {
+                id: 'mock-' + Date.now(),
+                symbol: symbol,
+                side: isBuy ? 'BUY' : 'SELL',
+                quantity: orderSize,
+                status: 'submitted'
+              };
+              
+              // Log the trade
+              const tradeInfo = {
+                timestamp: new Date().toISOString(),
+                symbol: symbol,
+                action: isBuy ? 'buy' : 'sell',
+                originalAmount: originalAmount,
+                orderSize: orderSize,
+                orderId: mockOrderResponse.id,
+                status: 'success'
+              };
+              
+              await logTrade(tradeInfo);
+              console.log("Trade logged successfully");
+              
+              return mockOrderResponse;
+              
+            } catch (error) {
+              console.error("Error placing order:", error.message);
+              
+              // Log the failed trade
+              const tradeInfo = {
+                timestamp: new Date().toISOString(),
+                symbol: signal?.symbol || 'UNKNOWN',
+                action: signal?.action || 'UNKNOWN',
+                error: error.message,
+                status: 'failed'
+              };
+              
+              await logTrade(tradeInfo);
+              console.log("Error logged to trade history");
+              
+              return { error: error.message };
+            }
+          }
+          
+          // Helper function to format symbol for IBKR
+          function formatSymbolForIBKR(symbol) {
+            // IBKR typically requires specific symbol formats
+            // This is a simplified example - you'll need to adjust based on IBKR requirements
+            // For US stocks, it might be something like 'AAPL' or 'AAPL STK SMART'
+            return symbol;
+          }
+          
+          // Helper function to log trades
+          async function logTrade(tradeInfo) {
+            try {
+              // Check if the log file exists
+              let trades = [];
+              if (fs.existsSync(TRADE_LOG_FILE)) {
+                // Read existing logs
+                const data = fs.readFileSync(TRADE_LOG_FILE, 'utf8');
+                try {
+                  trades = JSON.parse(data);
+                } catch (e) {
+                  console.error("Error parsing trade history JSON:", e.message);
+                  trades = [];
+                }
+              }
+              
+              // Add the new trade
+              trades.push(tradeInfo);
+              
+              // Write back to file
+              fs.writeFileSync(TRADE_LOG_FILE, JSON.stringify(trades, null, 2));
+              console.log("Trade logged successfully!");
+            } catch (error) {
+              console.error("Error logging trade:", error.message);
+            }
+          }
+          
+          // Execute the function
+          placeOrder().then(() => {
+            console.log("Order process completed");
+          }).catch(err => {
+            console.error("Unhandled error:", err);
+          });
+          EOF
+          
+          node trade.js
+          
+          # Debug: List files after script execution
+          echo "Files in directory after script execution:"
+          ls -la
+      - name: Commit updated trade history
+        run: |
+          # Configure git
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          
+          # Check if trade_history.json exists
+          if [ -f "trade_history.json" ]; then
+            # Add the file and commit
+            git add trade_history.json
+            git commit -m "Update trade history [skip ci]" || echo "No changes to commit"
+            
+            # Push changes to the repository
+            git push || echo "Failed to push changes"
+          else
+            echo "trade_history.json not found"
+          fi
